@@ -14,6 +14,7 @@ const messagesDiv = document.getElementById("messages");
 const input = document.getElementById("messageInput");
 
 let admin = false;
+let timeoutMode = false;
 
 function renderMessages(messages) {
 
@@ -26,6 +27,21 @@ function renderMessages(messages) {
         div.className = "message";
 
         div.innerText = msg.formatted;
+
+        // CLICK MESSAGE TO TIMEOUT
+        div.addEventListener("click", () => {
+
+            if (!timeoutMode) return;
+
+            socket.emit("sendMessage", {
+                message: `/messagetimeout ${msg.id}`,
+                admin: true
+            });
+
+            timeoutMode = false;
+
+            alert("[message timed out]");
+        });
 
         messagesDiv.appendChild(div);
     });
@@ -50,63 +66,15 @@ socket.on("systemMessage", msg => {
     alert(msg);
 });
 
-socket.on("shutdown", () => {
-
-    alert("[SERVER SHUTDOWN]");
-});
-
-socket.on("kicked", reason => {
-
-    document.body.innerHTML = `
-        <div style="
-            width:100vw;
-            height:100vh;
-            background:gray;
-            color:white;
-            display:flex;
-            justify-content:center;
-            align-items:center;
-            flex-direction:column;
-            font-size:30px;
-            text-align:center;
-        ">
-            YOU WERE KICKED
-            <br><br>
-            ${reason}
-        </div>
-    `;
-});
-
-socket.on("muted", () => {
-
-    input.placeholder = "[you are muted]";
-    input.value = "[muted_message]";
-});
-
 input.addEventListener("keydown", e => {
 
-    if (e.key === "Enter") {
-
-        sendMessage();
-    }
-});
-
-// MOBILE SUPPORT
-input.addEventListener("keypress", e => {
-
-    if (e.key === "Enter") {
-
-        sendMessage();
-    }
-});
-
-function sendMessage() {
+    if (e.key !== "Enter") return;
 
     const text = input.value.trim();
 
     if (text === "") return;
 
-    // ADMIN ENABLE
+    // ENABLE ADMIN
     if (text === "githubjutsu") {
 
         input.value = "";
@@ -119,49 +87,43 @@ function sendMessage() {
     }
 
     // COMMANDS
-    if (admin && text.startsWith("/")) {
+    if (admin) {
 
-        input.value = "";
+        // CMD
+        if (text === ">cmd") {
 
-        // HELP
-        if (
-            text === "/help" ||
-            text === "/?" ||
-            text === "/cmds"
-        ) {
+            input.value = "";
 
             alert(
-`[commandlist]
+`COMMANDS
 
-/messagetimeout [id]
-/ban [user]
-/guestban
-/shutdown
-/shutdown in [seconds]
-/mute [user] [minutes] [seconds]
-/kick [user] [message]
-/help
-/? 
-/cmds`
+>messagetimeout
+>cmd`
             );
 
-        } else {
-
-            alert(`[command detected]: ${text}`);
+            return;
         }
 
-        socket.emit("sendMessage", {
-            message: text,
-            admin: true
-        });
+        // MESSAGE TIMEOUT MODE
+        if (text === ">messagetimeout") {
 
-        return;
+            input.value = "";
+
+            timeoutMode = true;
+
+            alert(
+"[CLICK A MESSAGE TO TIMEOUT IT]"
+            );
+
+            return;
+        }
     }
 
+    // NORMAL MESSAGE
     socket.emit("sendMessage", {
         message: text,
         admin
     });
 
     input.value = "";
-}
+});
