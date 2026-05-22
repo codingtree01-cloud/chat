@@ -1,106 +1,136 @@
-const express = require("express");
-const http = require("http");
-const fs = require("fs");
-const path = require("path");
-const { Server } = require("socket.io");
+let username = prompt("Enter gmail or username:");
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
-
-const PORT = 3000;
-
-app.use(express.static("public"));
-
-let messages = [];
-let shutdownMode = false;
-
-const logsDir = path.join(__dirname, "logs");
-
-if (!fs.existsSync(logsDir)) {
-    fs.mkdirSync(logsDir);
+if (!username || username.trim() === "") {
+    username = `guest_${Math.floor(Math.random() * 99999)}`;
 }
 
-const timeoutLogFile = path.join(logsDir, "timeout_logs.txt");
+const socket = io({
+    query: {
+        username
+    }
+});
 
-if (!fs.existsSync(timeoutLogFile)) {
-    fs.writeFileSync(timeoutLogFile, "");
-}
+const messagesDiv = document.getElementById("messages");
+const input = document.getElementById("messageInput");
 
-function formatDate(date) {
+let admin = false;
 
-    const yyyy = date.getFullYear();
-    const dd = String(date.getDate()).padStart(2, "0");
-    const hh = String(date.getHours()).padStart(2, "0");
-    const mm = String(date.getMinutes()).padStart(2, "0");
-    const ss = String(date.getSeconds()).padStart(2, "0");
+function renderMessages(messages) {
 
-    return `${yyyy}:${dd}:${hh}:${mm}:${ss}`;
-}
-
-function timeoutMessage(msg) {
-
-    fs.appendFileSync(
-        timeoutLogFile,
-        `>message timed out [${formatDate(new Date())} /${msg.name}]: ${msg.message}\n`
-    );
-
-    messages = messages.filter(m => m.id !== msg.id);
-
-    io.emit("messages", messages);
-}
-
-setInterval(() => {
-
-    const now = Date.now();
+    messagesDiv.innerHTML = "";
 
     messages.forEach(msg => {
 
-        if (now - msg.timestamp >= 3600000) {
+        const div = document.createElement("div");
 
-            timeoutMessage(msg);
-        }
+        div.className = "message";
+
+        div.innerText = msg.formatted;
+
+        messagesDiv.appendChild(div);
     });
 
-}, 5000);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
 
-io.on("connection", socket => {
+socket.on("messages", msgs => {
 
-    let username =
-        socket.handshake.query.username ||
-        `guest_${Math.floor(Math.random() * 99999)}`;
+    renderMessages(msgs);
+});
 
-    socket.emit("messages", messages);
+socket.on("adminEnabled", () => {
 
-    socket.on("sendMessage", data => {
+    admin = true;
 
-        if (shutdownMode) return;
+    alert("[ADMIN MODE ENABLED]");
+});
 
-        const text = data.message;
+socket.on("systemMessage", msg => {
 
-        // ENABLE ADMIN MODE
-        if (text === "githubjutsu") {
+    alert(msg);
+});
 
-            socket.emit("adminEnabled");
+socket.on("shutdown", () => {
 
-            return;
-        }
+    alert("[SERVER SHUTDOWN]");
+});
 
-        // COMMANDS
-        if (data.admin && text.startsWith("/")) {
+socket.on("kicked", reason => {
 
-            const parts = text.split(" ");
-            const cmd = parts[0];
+    document.body.innerHTML = `
+        <div style="
+            width:100vw;
+            height:100vh;
+            background:gray;
+            color:white;
+            display:flex;
+            justify-content:center;
+            align-items:center;
+            flex-direction:column;
+            font-size:30px;
+            text-align:center;
+        ">
+            YOU WERE KICKED
+            <br><br>
+            ${reason}
+        </div>
+    `;
+});
 
-            // HELP
-            if (
-                cmd === "/help" ||
-                cmd === "/?" ||
-                cmd === "/cmds"
-            ) {
+socket.on("muted", () => {
 
-                socket.emit(
-                    "systemMessage",
+    input.placeholder = "[you are muted]";
+    input.value = "[muted_message]";
+});
+
+input.addEventListener("keydown", e => {
+
+    if (e.key === "Enter") {
+
+        sendMessage();
+    }
+});
+
+// MOBILE SUPPORT
+input.addEventListener("keypress", e => {
+
+    if (e.key === "Enter") {
+
+        sendMessage();
+    }
+});
+
+function sendMessage() {
+
+    const text = input.value.trim();
+
+    if (text === "") return;
+
+    // ADMIN ENABLE
+    if (text === "githubjutsu") {
+
+        input.value = "";
+
+        socket.emit("sendMessage", {
+            message: text
+        });
+
+        return;
+    }
+
+    // COMMANDS
+    if (admin && text.startsWith("/")) {
+
+        input.value = "";
+
+        // HELP
+        if (
+            text === "/help" ||
+            text === "/?" ||
+            text === "/cmds"
+        ) {
+
+            alert(
 `[commandlist]
 
 /messagetimeout [id]
@@ -113,177 +143,25 @@ io.on("connection", socket => {
 /help
 /? 
 /cmds`
-                );
+            );
 
-                return;
-            }
+        } else {
 
-            // MESSAGE TIMEOUT
-            if (cmd === "/messagetimeout") {
-
-                const id = parts[1];
-
-                const msg = messages.find(m => String(m.id) === String(id));
-
-                if (msg) {
-
-                    timeoutMessage(msg);
-
-                    socket.emit(
-                        "systemMessage",
-                        `[command detected]: message timed out`
-                    );
-                }
-
-                return;
-            }
-
-            // BAN
-            if (cmd === "/ban") {
-
-                const user = parts[1];
-
-                socket.emit(
-                    "systemMessage",
-                    `[command detected]: banned ${user}`
-                );
-
-                return;
-            }
-
-            // SHUTDOWN
-            if (cmd === "/shutdown") {
-
-                if (parts[1] === "in") {
-
-                    const seconds = Number(parts[2]);
-
-                    socket.emit(
-                        "systemMessage",
-                        `[command detected]: shutdown in ${seconds} seconds`
-                    );
-
-                    setTimeout(() => {
-
-                        shutdownMode = true;
-
-                        messages = [];
-
-                        io.emit("shutdown");
-
-                        setTimeout(() => {
-
-                            shutdownMode = false;
-
-                            io.emit("messages", messages);
-
-                        }, 3000);
-
-                    }, seconds * 1000);
-
-                } else {
-
-                    socket.emit(
-                        "systemMessage",
-                        `[command detected]: shutdown`
-                    );
-
-                    shutdownMode = true;
-
-                    messages = [];
-
-                    io.emit("shutdown");
-
-                    setTimeout(() => {
-
-                        shutdownMode = false;
-
-                        io.emit("messages", messages);
-
-                    }, 3000);
-                }
-
-                return;
-            }
-
-            // MUTE
-            if (cmd === "/mute") {
-
-                const user = parts[1];
-                const mins = parts[2];
-                const secs = parts[3];
-
-                socket.emit(
-                    "systemMessage",
-                    `[command detected]: muted ${user} for ${mins}m ${secs}s`
-                );
-
-                return;
-            }
-
-            // KICK
-            if (cmd === "/kick") {
-
-                const user = parts[1];
-                const reason = parts.slice(2).join(" ");
-
-                for (let [id, s] of io.of("/").sockets) {
-
-                    if (s.handshake.query.username === user) {
-
-                        s.emit("kicked", reason);
-                    }
-                }
-
-                socket.emit(
-                    "systemMessage",
-                    `[command detected]: kicked ${user}`
-                );
-
-                return;
-            }
-
-            // GUESTBAN
-            if (cmd === "/guestban") {
-
-                socket.emit(
-                    "systemMessage",
-                    `[command detected]: guestban`
-                );
-
-                return;
-            }
-
-            return;
+            alert(`[command detected]: ${text}`);
         }
 
-        // NORMAL MESSAGE
-        const msg = {
-
-            id: Date.now() + Math.random(),
-
-            name: username,
-
+        socket.emit("sendMessage", {
             message: text,
+            admin: true
+        });
 
-            timestamp: Date.now(),
+        return;
+    }
 
-            formatted:
-                `[${formatDate(new Date())} /${username}]: ${text}`
-        };
-
-        messages.push(msg);
-
-        io.emit("messages", messages);
+    socket.emit("sendMessage", {
+        message: text,
+        admin
     });
 
-    socket.on("disconnect", () => {
-
-        console.log(`${username} disconnected.`);
-    });
-});
-
-server.listen(PORT, () => {
-
-    console.log(`Server running on http://localhost:${PORT}`);
-});
+    input.value = "";
+}
